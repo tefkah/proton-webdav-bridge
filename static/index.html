@@ -36,9 +36,6 @@
 			.status-dot.disconnected {
 				background-color: #f44336;
 			}
-			form {
-				display: none;
-			}
 			input,
 			button {
 				display: block;
@@ -66,161 +63,428 @@
 				color: #4caf50;
 				margin-top: 10px;
 			}
-			#logout {
+			.danger-button {
 				background-color: #f44336;
 			}
-			#logout:hover {
+			.danger-button:hover {
 				background-color: #d32f2f;
 			}
+			.hidden {
+				display: none;
+			}
 		</style>
+		<!-- Preact CDN -->
+		<script src="https://unpkg.com/preact@10.11.3/dist/preact.min.js"></script>
+		<script src="https://unpkg.com/preact@10.11.3/hooks/dist/hooks.umd.js"></script>
+		<script src="https://unpkg.com/htm@3.1.1/dist/htm.js"></script>
 	</head>
 	<body>
-		<h1>Proton WebDAV Bridge Admin</h1>
-
-		<div class="card">
-			<div class="status">
-				<div id="status-dot" class="status-dot disconnected"></div>
-				<div id="status-text">Checking status...</div>
-			</div>
-			<div id="last-login"></div>
-			<div id="error-message" class="error"></div>
-		</div>
-
-		<div id="login-card" class="card">
-			<h2>Login</h2>
-			<form id="login-form">
-				<input type="text" id="username" name="username" placeholder="Username / Email" required />
-				<input type="password" id="password" name="password" placeholder="Password" required />
-				<input
-					type="password"
-					id="mailbox-password"
-					name="mailbox_password"
-					placeholder="Mailbox Password (optional)"
-				/>
-				<input type="text" id="twofa" name="twofa" placeholder="2FA Token (if enabled)" />
-				<button type="submit">Login</button>
-				<div id="login-error" class="error"></div>
-				<div id="login-success" class="success"></div>
-			</form>
-			<button id="logout" style="display: none">Logout</button>
-		</div>
+		<div id="app"></div>
 
 		<script>
-			// Elements
-			const statusDot = document.getElementById("status-dot");
-			const statusText = document.getElementById("status-text");
-			const lastLogin = document.getElementById("last-login");
-			const errorMessage = document.getElementById("error-message");
-			const loginForm = document.getElementById("login-form");
-			const loginError = document.getElementById("login-error");
-			const loginSuccess = document.getElementById("login-success");
-			const logoutButton = document.getElementById("logout");
+			// Initialize Preact components
+			const { h, render, Component } = preact;
+			const { useState, useEffect, useCallback } = preactHooks;
+			const html = htm.bind(h);
 
-			// Check status periodically
-			function checkStatus() {
-				fetch("/api/status")
-					.then((response) => response.json())
-					.then((data) => {
-						if (data.logged_in) {
-							statusDot.className = "status-dot connected";
-							statusText.textContent = "Connected to Proton Drive";
-							loginForm.style.display = "none";
-							logoutButton.style.display = "block";
+			// Admin Setup Form Component
+			function AdminSetupForm({ onSetupSuccess }) {
+				const [password, setPassword] = useState("");
+				const [confirmPassword, setConfirmPassword] = useState("");
+				const [error, setError] = useState("");
+				const [isSubmitting, setIsSubmitting] = useState(false);
 
-							if (data.last_login) {
-								const loginTime = new Date(data.last_login);
-								lastLogin.textContent = `Last login: ${loginTime.toLocaleString()}`;
-							}
-						} else {
-							statusDot.className = "status-dot disconnected";
-							statusText.textContent = "Not connected to Proton Drive";
-							loginForm.style.display = "block";
-							logoutButton.style.display = "none";
+				const handleSubmit = async (e) => {
+					e.preventDefault();
+					setError("");
 
-							if (data.error) {
-								errorMessage.textContent = `Error: ${data.error}`;
-							} else if (data.needs_login) {
-								errorMessage.textContent = "Login required";
-							}
+					// Validate passwords match
+					if (password !== confirmPassword) {
+						setError("Passwords do not match");
+						return;
+					}
+
+					// Validate password length
+					if (password.length < 8) {
+						setError("Password must be at least 8 characters");
+						return;
+					}
+
+					// Submit setup request
+					setIsSubmitting(true);
+					try {
+						const response = await fetch("/api/admin/setup", {
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify({ password }),
+						});
+
+						if (!response.ok) {
+							const text = await response.text();
+							throw new Error(text);
 						}
-					})
-					.catch((error) => {
-						console.error("Error fetching status:", error);
-						statusText.textContent = "Error checking status";
-						errorMessage.textContent = error.message;
-					});
-			}
 
-			// Initial check and set interval
-			checkStatus();
-			setInterval(checkStatus, 10000); // Check every 10 seconds
-
-			// Handle login form submission
-			loginForm.addEventListener("submit", function (e) {
-				e.preventDefault();
-
-				loginError.textContent = "";
-				loginSuccess.textContent = "";
-
-				const formData = {
-					username: document.getElementById("username").value,
-					password: document.getElementById("password").value,
-					mailbox_password: document.getElementById("mailbox-password").value,
-					twofa: document.getElementById("twofa").value,
+						onSetupSuccess();
+					} catch (error) {
+						setError(`Setup failed: ${error.message}`);
+					} finally {
+						setIsSubmitting(false);
+					}
 				};
 
-				// Show loading state
-				const submitButton = loginForm.querySelector('button[type="submit"]');
-				const originalText = submitButton.textContent;
-				submitButton.textContent = "Logging in...";
-				submitButton.disabled = true;
+				return html`
+					<div class="card">
+						<h2>Welcome to Proton WebDAV Bridge</h2>
+						<p>Please set up an admin password to secure this interface.</p>
+						<form onSubmit=${handleSubmit}>
+							<input
+								type="password"
+								placeholder="Password (min 8 characters)"
+								value=${password}
+								onInput=${(e) => setPassword(e.target.value)}
+								minlength="8"
+								required
+							/>
+							<input
+								type="password"
+								placeholder="Confirm Password"
+								value=${confirmPassword}
+								onInput=${(e) => setConfirmPassword(e.target.value)}
+								minlength="8"
+								required
+							/>
+							<button type="submit" disabled=${isSubmitting}>${isSubmitting ? "Setting up..." : "Set Password"}</button>
+							${error && html`<div class="error">${error}</div>`}
+						</form>
+					</div>
+				`;
+			}
 
-				fetch("/api/login", {
-					method: "POST",
-					headers: {
-						"Content-Type": "application/json",
-					},
-					body: JSON.stringify(formData),
-				})
-					.then((response) => {
+			// Admin Login Form Component
+			function AdminLoginForm({ onLoginSuccess }) {
+				const [password, setPassword] = useState("");
+				const [error, setError] = useState("");
+				const [isSubmitting, setIsSubmitting] = useState(false);
+
+				const handleSubmit = async (e) => {
+					e.preventDefault();
+					setError("");
+
+					// Submit login request
+					setIsSubmitting(true);
+					try {
+						const response = await fetch("/api/admin/login", {
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify({ password }),
+							credentials: "same-origin",
+						});
+
 						if (!response.ok) {
-							return response.text().then((text) => {
-								throw new Error(text);
-							});
+							const text = await response.text();
+							throw new Error(text);
 						}
-						return response.json();
-					})
-					.then((data) => {
-						loginSuccess.textContent = "Login successful. Restarting service...";
-						setTimeout(function () {
-							window.location.reload();
-						}, 2000);
-					})
-					.catch((error) => {
-						loginError.textContent = `Login failed: ${error.message}`;
-						submitButton.textContent = originalText;
-						submitButton.disabled = false;
-					});
-			});
 
-			// Handle logout button
-			logoutButton.addEventListener("click", function () {
-				fetch("/api/logout", {
-					method: "POST",
-				})
-					.then((response) => response.json())
-					.then(() => {
-						statusDot.className = "status-dot disconnected";
-						statusText.textContent = "Logged out successfully";
-						loginForm.style.display = "block";
-						logoutButton.style.display = "none";
-						lastLogin.textContent = "";
-						setTimeout(checkStatus, 1000);
-					})
-					.catch((error) => {
-						errorMessage.textContent = `Logout failed: ${error.message}`;
-					});
-			});
+						const result = await response.json();
+						console.log("Login response:", result);
+
+						// Don't rely on checking cookies - use the API response directly
+						// The server sets an HttpOnly cookie we can't read from JS
+						if (result.success) {
+							console.log("Login successful, bypassing cookie check");
+							localStorage.setItem("adminAuthenticated", "true");
+							onLoginSuccess();
+						} else {
+							throw new Error("Login failed");
+						}
+					} catch (error) {
+						setError(`Login failed: ${error.message}`);
+						setIsSubmitting(false);
+					}
+				};
+
+				return html`
+					<div class="card">
+						<h2>Admin Login</h2>
+						<p>Please login to access the admin interface.</p>
+						<form onSubmit=${handleSubmit}>
+							<input
+								type="password"
+								placeholder="Password"
+								value=${password}
+								onInput=${(e) => setPassword(e.target.value)}
+								required
+							/>
+							<button type="submit" disabled=${isSubmitting}>${isSubmitting ? "Logging in..." : "Login"}</button>
+							${error && html`<div class="error">${error}</div>`}
+						</form>
+					</div>
+				`;
+			}
+
+			// Proton Login Form Component
+			function ProtonLoginForm({ onLoginSuccess }) {
+				const [formData, setFormData] = useState({
+					username: "",
+					password: "",
+					mailbox_password: "",
+					twofa: "",
+				});
+				const [error, setError] = useState("");
+				const [success, setSuccess] = useState("");
+				const [isSubmitting, setIsSubmitting] = useState(false);
+
+				const handleChange = (e) => {
+					setFormData({ ...formData, [e.target.name]: e.target.value });
+				};
+
+				const handleSubmit = async (e) => {
+					e.preventDefault();
+					setError("");
+					setSuccess("");
+
+					// Submit login request
+					setIsSubmitting(true);
+					try {
+						const response = await fetch("/api/login", {
+							method: "POST",
+							headers: {
+								"Content-Type": "application/json",
+							},
+							body: JSON.stringify(formData),
+						});
+
+						if (!response.ok) {
+							const text = await response.text();
+							throw new Error(text);
+						}
+
+						setSuccess("Login successful");
+						setTimeout(() => {
+							onLoginSuccess();
+						}, 1000);
+					} catch (error) {
+						setError(`Login failed: ${error.message}`);
+					} finally {
+						setIsSubmitting(false);
+					}
+				};
+
+				return html`
+					<div class="card">
+						<h2>Proton Login</h2>
+						<form onSubmit=${handleSubmit}>
+							<input
+								type="text"
+								name="username"
+								placeholder="Username / Email"
+								value=${formData.username}
+								onInput=${handleChange}
+								required
+							/>
+							<input
+								type="password"
+								name="password"
+								placeholder="Password"
+								value=${formData.password}
+								onInput=${handleChange}
+								required
+							/>
+							<input
+								type="password"
+								name="mailbox_password"
+								placeholder="Mailbox Password (optional)"
+								value=${formData.mailbox_password}
+								onInput=${handleChange}
+							/>
+							<input
+								type="text"
+								name="twofa"
+								placeholder="2FA Token (if enabled)"
+								value=${formData.twofa}
+								onInput=${handleChange}
+							/>
+							<button type="submit" disabled=${isSubmitting}>
+								${isSubmitting ? "Logging in..." : "Login to Proton"}
+							</button>
+							${error && html`<div class="error">${error}</div>`}
+							${success && html`<div class="success">${success}</div>`}
+						</form>
+					</div>
+				`;
+			}
+
+			// Status Component
+			function StatusCard({ status, onLogout }) {
+				const { logged_in, last_login, error, needs_login } = status;
+
+				return html`
+					<div class="card">
+						<div class=${`status-dot ${logged_in ? "connected" : "disconnected"}`}></div>
+						<div>${logged_in ? "Connected to Proton Drive" : "Not connected to Proton Drive"}</div>
+						${last_login && html`<div>Last login: ${new Date(last_login).toLocaleString()}</div>`}
+						${error && html`<div class="error">Error: ${error}</div>`}
+						${needs_login && !error && html`<div class="error">Login required</div>`}
+						${logged_in && html` <button class="danger-button" onClick=${onLogout}>Logout from Proton</button> `}
+					</div>
+				`;
+			}
+
+			// Main App Component
+			function App() {
+				const [adminStatus, setAdminStatus] = useState({ initialized: false, checked: false });
+				const [protonStatus, setProtonStatus] = useState({ logged_in: false, needs_login: true });
+				const [adminAuthenticated, setAdminAuthenticated] = useState(false);
+
+				// Check admin authentication status
+				const checkAdminStatus = useCallback(async () => {
+					try {
+						console.log("Checking admin status");
+
+						const response = await fetch("/api/admin/status", {
+							credentials: "same-origin",
+						});
+
+						console.log("Admin status response:", response.status);
+
+						// Check if our request was authorized
+						if (response.status === 401) {
+							console.log("Admin status returned 401, not authenticated");
+							localStorage.removeItem("adminAuthenticated");
+							setAdminAuthenticated(false);
+							setAdminStatus({ initialized: true, checked: true });
+							return;
+						}
+
+						const data = await response.json();
+						console.log("Admin status data:", data);
+
+						setAdminStatus({ ...data, checked: true });
+
+						// Get authentication state from localStorage
+						const isAuthenticated = localStorage.getItem("adminAuthenticated") === "true";
+						console.log("Auth state from localStorage:", isAuthenticated);
+
+						if (isAuthenticated) {
+							console.log("Admin authenticated from localStorage");
+							setAdminAuthenticated(true);
+							checkProtonStatus();
+						} else {
+							console.log("Not authenticated");
+							setAdminAuthenticated(false);
+						}
+					} catch (error) {
+						console.error("Error checking admin status:", error);
+						setAdminAuthenticated(false);
+					}
+				}, []);
+
+				// More explicit login success handler
+				const handleAdminLoginSuccess = () => {
+					console.log("Admin login successful, setting authenticated state");
+					setAdminAuthenticated(true);
+					checkProtonStatus();
+				};
+
+				// Check Proton connection status
+				const checkProtonStatus = useCallback(async () => {
+					try {
+						const response = await fetch("/api/status");
+
+						// Handle unauthorized (admin auth required)
+						if (response.status === 401) {
+							setAdminAuthenticated(false);
+							return;
+						}
+
+						const data = await response.json();
+						setProtonStatus(data);
+					} catch (error) {
+						console.error("Error checking Proton status:", error);
+					}
+				}, []);
+
+				// Handle admin logout
+				const handleAdminLogout = async () => {
+					try {
+						await fetch("/api/admin/logout", { method: "POST", credentials: "same-origin" });
+						// Clear local authentication state
+						localStorage.removeItem("adminAuthenticated");
+						setAdminAuthenticated(false);
+						checkAdminStatus();
+					} catch (error) {
+						console.error("Error logging out admin:", error);
+					}
+				};
+
+				// Handle Proton logout
+				const handleProtonLogout = async () => {
+					try {
+						await fetch("/api/logout", { method: "POST" });
+						setTimeout(() => {
+							checkProtonStatus();
+						}, 1000);
+					} catch (error) {
+						console.error("Error logging out from Proton:", error);
+					}
+				};
+
+				// Initial check on mount
+				useEffect(() => {
+					console.log("App mounted, checking admin status");
+					checkAdminStatus();
+
+					// Set intervals for periodic checks
+					const adminInterval = setInterval(checkAdminStatus, 30000);
+					const protonInterval = setInterval(() => {
+						if (adminAuthenticated) {
+							checkProtonStatus();
+						}
+					}, 10000);
+
+					return () => {
+						clearInterval(adminInterval);
+						clearInterval(protonInterval);
+					};
+				}, [checkAdminStatus, checkProtonStatus, adminAuthenticated]);
+
+				// Loading state
+				if (!adminStatus.checked) {
+					return html`<div class="card"><p>Loading...</p></div>`;
+				}
+
+				// Admin setup flow
+				if (!adminStatus.initialized) {
+					return html`<${AdminSetupForm} onSetupSuccess=${checkAdminStatus} />`;
+				}
+
+				// Admin login flow
+				if (!adminAuthenticated) {
+					return html`<${AdminLoginForm} onLoginSuccess=${handleAdminLoginSuccess} />`;
+				}
+
+				// Admin authenticated, show main content
+				return html`
+					<div>
+						<div class="card">
+							<h2>Admin Panel</h2>
+							<p>You are logged in as administrator.</p>
+							<button class="danger-button" onClick=${handleAdminLogout}>Logout from Admin</button>
+						</div>
+
+						<${StatusCard} status=${protonStatus} onLogout=${handleProtonLogout} />
+
+						${!protonStatus.logged_in && html` <${ProtonLoginForm} onLoginSuccess=${checkProtonStatus} /> `}
+					</div>
+				`;
+			}
+
+			// Render the app
+			render(html`<${App} />`, document.getElementById("app"));
 		</script>
 	</body>
 </html>

@@ -216,6 +216,24 @@ The bridge now includes a web-based admin interface that allows you to:
 
 This is particularly useful when using 2FA, as it provides a web form for entering your credentials including 2FA token when needed. The admin interface is accessible at `http://localhost:7985` by default.
 
+### Admin Password Protection
+
+The admin interface is protected by a password:
+
+1. **First-time setup**: When you first access the admin interface, you'll be prompted to create a password
+2. **Authentication**: After setting a password, you'll need to log in to access the WebDAV management features
+3. **Password reset**: If you forget your password, you can reset it by setting the `ADMIN_PASSWORD_RESET=true` environment variable:
+
+```bash
+docker run -d \
+  --name proton-webdav \
+  -p 7984:7984 \
+  -p 7985:7985 \
+  -v proton-webdav-data:/root/.local/share \
+  -e ADMIN_PASSWORD_RESET=true \
+  ghcr.io/tefkah/proton-webdav-bridge:latest
+```
+
 ### No Valid Tokens
 
 When starting without valid tokens, the bridge will:

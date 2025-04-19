@@ -3,7 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
 	"embed"
+	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -22,8 +26,9 @@ import (
 )
 
 const (
-	TokenFile  = "proton-webdav-bridge/tokens.json"
-	AppVersion = "macos-drive@1.0.0-alpha.1+proton-webdav-bridge"
+	TokenFile        = "proton-webdav-bridge/tokens.json"
+	AdminPasswordFile = "proton-webdav-bridge/admin_password.json"
+	AppVersion       = "macos-drive@1.0.0-alpha.1+proton-webdav-bridge"
 )
 
 var (
@@ -34,6 +39,7 @@ var (
 	webdavServer   *http.Server
 	webdavCancel   context.CancelFunc
 	webdavMutex    sync.Mutex
+	adminAuth      = &AdminAuth{initialized: false}
 )
 
 // embed static files
@@ -49,12 +55,42 @@ type AuthStatus struct {
 	mu          sync.Mutex
 }
 
+// AdminAuth keeps track of admin authentication
+type AdminAuth struct {
+	initialized bool
+	passwordHash string
+	salt string
+	sessions map[string]time.Time
+	mu sync.Mutex
+}
+
+// AdminPasswordData represents stored password data
+type AdminPasswordData struct {
+	PasswordHash string `json:"password_hash"`
+	Salt         string `json:"salt"`
+}
+
 // loginRequest represents login form data
 type loginRequest struct {
 	Username        string `json:"username"`
 	Password        string `json:"password"`
 	MailboxPassword string `json:"mailbox_password"`
 	TwoFA           string `json:"twofa"`
+}
+
+// adminLoginRequest represents admin login data
+type adminLoginRequest struct {
+	Password string `json:"password"`
+}
+
+// adminSetupRequest represents admin setup data
+type adminSetupRequest struct {
+	Password string `json:"password"`
+}
+
+// adminStatusResponse represents admin status
+type adminStatusResponse struct {
+	Initialized bool `json:"initialized"`
 }
 
 // get credential from environment or prompt user
@@ -159,6 +195,15 @@ func canAutoLogin() bool {
 }
 
 func doListen() error {
+	// Check for admin password reset
+	if os.Getenv("ADMIN_PASSWORD_RESET") == "true" {
+		fmt.Println("Admin password reset requested, removing password file...")
+		resetAdminPassword()
+	}
+
+	// Initialize admin auth
+	initAdminAuth()
+
 	// Always start the admin server first
 	go startAdminServer()
 	
@@ -207,6 +252,115 @@ func doListen() error {
 	return nil
 }
 
+// initialize admin auth system
+func initAdminAuth() {
+	adminAuth.mu.Lock()
+	defer adminAuth.mu.Unlock()
+
+	// Initialize sessions map
+	adminAuth.sessions = make(map[string]time.Time)
+
+	// Try to load existing password data
+	data, err := loadAdminPassword()
+	if err != nil {
+		// No password set yet, will show setup screen
+		adminAuth.initialized = false
+		return
+	}
+
+	// Password found, initialize auth system
+	adminAuth.passwordHash = data.PasswordHash
+	adminAuth.salt = data.Salt
+	adminAuth.initialized = true
+}
+
+// resetAdminPassword deletes the admin password file to reset it
+func resetAdminPassword() {
+	file, err := xdg.DataFile(AdminPasswordFile)
+	if err == nil {
+		os.Remove(file)
+		fmt.Println("Admin password has been reset.")
+	}
+	
+	// Reset the in-memory state
+	adminAuth.mu.Lock()
+	adminAuth.initialized = false
+	adminAuth.passwordHash = ""
+	adminAuth.salt = ""
+	adminAuth.sessions = make(map[string]time.Time)
+	adminAuth.mu.Unlock()
+}
+
+// loadAdminPassword loads the admin password data
+func loadAdminPassword() (AdminPasswordData, error) {
+	var data AdminPasswordData
+
+	file, err := xdg.DataFile(AdminPasswordFile)
+	if err != nil {
+		return data, err
+	}
+
+	enc, err := os.ReadFile(file)
+	if err != nil {
+		return data, err
+	}
+
+	err = json.Unmarshal(enc, &data)
+	if err != nil {
+		return data, err
+	}
+
+	return data, nil
+}
+
+// storeAdminPassword saves the admin password data
+func storeAdminPassword(data AdminPasswordData) error {
+	file, err := xdg.DataFile(AdminPasswordFile)
+	if err != nil {
+		return err
+	}
+
+	// Ensure the directory exists
+	dir := filepath.Dir(file)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return err
+	}
+
+	enc, err := json.Marshal(data)
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(file, enc, 0600)
+}
+
+// generateSalt creates a random salt for password hashing
+func generateSalt() (string, error) {
+	b := make([]byte, 16)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
+}
+
+// hashPassword creates a salted hash of the password
+func hashPassword(password, salt string) string {
+	hash := sha256.New()
+	hash.Write([]byte(password + salt))
+	return hex.EncodeToString(hash.Sum(nil))
+}
+
+// generateSessionToken creates a new session token
+func generateSessionToken() (string, error) {
+	b := make([]byte, 32)
+	_, err := rand.Read(b)
+	if err != nil {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
+}
+
 // startWebDAVServer starts the WebDAV server with current tokens
 func startWebDAVServer() {
 	webdavMutex.Lock()
@@ -222,7 +376,7 @@ func startWebDAVServer() {
 		fmt.Println("Error loading tokens:", err)
 		return
 	}
-	
+
 	fmt.Println("Waiting for network ...")
 	WaitNetwork()
 
@@ -280,8 +434,8 @@ func startWebDAVServer() {
 	webdavServer = &http.Server{
 		Addr: OptListen,
 		Handler: &webdav.Handler{
-			FileSystem: &ProtonFS{session: session},
-			LockSystem: webdav.NewMemLS(),
+		FileSystem: &ProtonFS{session: session},
+		LockSystem: webdav.NewMemLS(),
 		},
 	}
 	
@@ -328,10 +482,16 @@ func waitForever() {
 func startAdminServer() {
 	mux := http.NewServeMux()
 	
-	// API endpoints
-	mux.HandleFunc("/api/status", handleStatus)
-	mux.HandleFunc("/api/login", handleLogin)
-	mux.HandleFunc("/api/logout", handleLogout)
+	// Protected API endpoints
+	mux.HandleFunc("/api/status", withAdminAuth(handleStatus))
+	mux.HandleFunc("/api/login", withAdminAuth(handleLogin))
+	mux.HandleFunc("/api/logout", withAdminAuth(handleLogout))
+	
+	// Admin auth endpoints
+	mux.HandleFunc("/api/admin/status", handleAdminStatus)
+	mux.HandleFunc("/api/admin/setup", handleAdminSetup)
+	mux.HandleFunc("/api/admin/login", handleAdminLogin)
+	mux.HandleFunc("/api/admin/logout", handleAdminLogout)
 	
 	// Serve static files
 	sub, err := fs.Sub(staticFiles, "static")
@@ -347,6 +507,231 @@ func startAdminServer() {
 	if err != nil {
 		fmt.Printf("Admin server error: %v\n", err)
 	}
+}
+
+// withAdminAuth wraps a handler with admin authentication
+func withAdminAuth(handler http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// If not initialized yet, allow access
+		adminAuth.mu.Lock()
+		initialized := adminAuth.initialized
+		adminAuth.mu.Unlock()
+		
+		if !initialized {
+			handler(w, r)
+			return
+		}
+		
+		// Check for session cookie
+		cookie, err := r.Cookie("admin_session")
+		if err != nil {
+			http.Error(w, "Unauthorized", http.StatusUnauthorized)
+			return
+		}
+		
+		// Validate session
+		adminAuth.mu.Lock()
+		expiry, exists := adminAuth.sessions[cookie.Value]
+		adminAuth.mu.Unlock()
+		
+		if !exists || time.Now().After(expiry) {
+			http.Error(w, "Session expired", http.StatusUnauthorized)
+			return
+		}
+		
+		// Session valid, execute handler
+		handler(w, r)
+	}
+}
+
+func handleAdminStatus(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	
+	adminAuth.mu.Lock()
+	initialized := adminAuth.initialized
+	adminAuth.mu.Unlock()
+	
+	status := adminStatusResponse{
+		Initialized: initialized,
+	}
+	
+	err := json.NewEncoder(w).Encode(status)
+	if err != nil {
+		http.Error(w, "Error encoding response", http.StatusInternalServerError)
+	}
+}
+
+func handleAdminSetup(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Check if already initialized
+	adminAuth.mu.Lock()
+	initialized := adminAuth.initialized
+	adminAuth.mu.Unlock()
+	
+	if initialized {
+		http.Error(w, "Admin already initialized", http.StatusBadRequest)
+		return
+	}
+	
+	// Parse request
+	var req adminSetupRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	
+	// Validate password
+	if len(req.Password) < 8 {
+		http.Error(w, "Password must be at least 8 characters", http.StatusBadRequest)
+		return
+	}
+	
+	// Generate salt
+	salt, err := generateSalt()
+	if err != nil {
+		http.Error(w, "Error generating salt", http.StatusInternalServerError)
+		return
+	}
+	
+	// Hash password
+	passwordHash := hashPassword(req.Password, salt)
+	
+	// Store password data
+	data := AdminPasswordData{
+		PasswordHash: passwordHash,
+		Salt:         salt,
+	}
+	
+	if err := storeAdminPassword(data); err != nil {
+		http.Error(w, "Error storing password", http.StatusInternalServerError)
+		return
+	}
+	
+	// Update in-memory state
+	adminAuth.mu.Lock()
+	adminAuth.passwordHash = passwordHash
+	adminAuth.salt = salt
+	adminAuth.initialized = true
+	adminAuth.mu.Unlock()
+	
+	// Generate session token
+	token, err := generateSessionToken()
+	if err != nil {
+		http.Error(w, "Error generating session", http.StatusInternalServerError)
+		return
+	}
+	
+	// Store session
+	expiry := time.Now().Add(24 * time.Hour)
+	adminAuth.mu.Lock()
+	adminAuth.sessions[token] = expiry
+	adminAuth.mu.Unlock()
+	
+	// Set session cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "admin_session",
+		Value:    token,
+		Path:     "/",
+		Expires:  expiry,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func handleAdminLogin(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Check if initialized
+	adminAuth.mu.Lock()
+	initialized := adminAuth.initialized
+	passwordHash := adminAuth.passwordHash
+	salt := adminAuth.salt
+	adminAuth.mu.Unlock()
+	
+	if !initialized {
+		http.Error(w, "Admin not initialized", http.StatusBadRequest)
+		return
+	}
+	
+	// Parse request
+	var req adminLoginRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request", http.StatusBadRequest)
+		return
+	}
+	
+	// Validate password
+	if hashPassword(req.Password, salt) != passwordHash {
+		http.Error(w, "Invalid password", http.StatusUnauthorized)
+		return
+	}
+	
+	// Generate session token
+	token, err := generateSessionToken()
+	if err != nil {
+		http.Error(w, "Error generating session", http.StatusInternalServerError)
+		return
+	}
+	
+	// Store session
+	expiry := time.Now().Add(24 * time.Hour)
+	adminAuth.mu.Lock()
+	adminAuth.sessions[token] = expiry
+	adminAuth.mu.Unlock()
+	
+	// Set session cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "admin_session",
+		Value:    token,
+		Path:     "/",
+		Expires:  expiry,
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
+}
+
+func handleAdminLogout(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	
+	// Clear session cookie
+	http.SetCookie(w, &http.Cookie{
+		Name:     "admin_session",
+		Value:    "",
+		Path:     "/",
+		Expires:  time.Unix(0, 0),
+		HttpOnly: true,
+		SameSite: http.SameSiteStrictMode,
+	})
+	
+	// Remove session from memory if it exists
+	cookie, err := r.Cookie("admin_session")
+	if err == nil {
+		adminAuth.mu.Lock()
+		delete(adminAuth.sessions, cookie.Value)
+		adminAuth.mu.Unlock()
+	}
+	
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(map[string]bool{"success": true})
 }
 
 func handleStatus(w http.ResponseWriter, r *http.Request) {
