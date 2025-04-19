@@ -14,12 +14,34 @@ docker pull ghcr.io/stolld/proton-webdav-bridge:latest
 
 ### Authentication Options
 
-There are two ways to authenticate with Proton Drive:
+There are three ways to authenticate with Proton Drive:
 
-1. **Interactive login** - Logging in manually with prompts
-2. **Environment variables** - Providing credentials via environment variables
+1. **Web UI** - Login through the web admin interface (recommended)
+2. **Interactive login** - Logging in manually with prompts
+3. **Environment variables** - Providing credentials via environment variables
 
-#### Option 1: Interactive Login
+#### Option 1: Web UI (Recommended)
+
+Run the container without any login credentials:
+
+```bash
+docker run -d \
+  --name proton-webdav \
+  -p 7984:7984 \
+  -p 7985:7985 \
+  -v proton-webdav-data:/root/.local/share \
+  ghcr.io/stolld/proton-webdav-bridge:latest
+```
+
+Then open `http://localhost:7985` in your browser to access the admin interface. You'll be prompted to log in with your Proton credentials. After successful login, the WebDAV server will start automatically.
+
+This approach is particularly useful for:
+
+- Systems using 2FA authentication
+- When tokens expire and need to be refreshed
+- When you prefer not to store credentials in environment variables or scripts
+
+#### Option 2: Interactive Login
 
 To login to your Proton account interactively, run:
 
@@ -31,7 +53,7 @@ docker run -it --rm \
 
 This will prompt you for your credentials and store the authentication tokens in the mounted volume.
 
-#### Option 2: Environment Variables (Recommended for servers)
+#### Option 3: Environment Variables
 
 To run in a non-interactive environment, you can provide your credentials via environment variables:
 
@@ -39,6 +61,7 @@ To run in a non-interactive environment, you can provide your credentials via en
 docker run -d \
   --name proton-webdav \
   -p 7984:7984 \
+  -p 7985:7985 \
   -v proton-webdav-data:/root/.local/share \
   -e PROTON_USERNAME=your-username \
   -e PROTON_PASSWORD=your-password \
@@ -74,6 +97,7 @@ After setting up authentication, you can run the WebDAV bridge with:
 docker run -d \
   --name proton-webdav \
   -p 7984:7984 \
+  -p 7985:7985 \
   -v proton-webdav-data:/root/.local/share \
   ghcr.io/stolld/proton-webdav-bridge:latest
 ```
@@ -82,10 +106,12 @@ This will:
 
 - Run the container in detached mode (`-d`)
 - Name the container `proton-webdav`
-- Map port 7984 from the container to your host
+- Map WebDAV port 7984 from the container to your host
+- Map admin interface port 7985 from the container to your host
 - Mount the volume with your authentication tokens
 
-The WebDAV server will be accessible at `http://localhost:7984`.
+The WebDAV server will be accessible at `http://localhost:7984`.  
+The admin interface will be accessible at `http://localhost:7985`.
 
 ### Using with docker-compose
 
@@ -101,6 +127,7 @@ services:
     restart: unless-stopped
     ports:
       - "7984:7984"
+      - "7985:7985"
     volumes:
       - proton-webdav-data:/root/.local/share
     environment:
@@ -117,6 +144,40 @@ volumes:
 ### Securing your credentials
 
 For production use, consider using Docker secrets or encrypted environment files to store your credentials securely.
+
+## Admin Interface
+
+The bridge now includes a web-based admin interface that allows you to:
+
+1. View the current connection status
+2. Login with your Proton credentials when tokens expire
+3. Logout (delete saved tokens)
+
+This is particularly useful when using 2FA, as it provides a web form for entering your credentials including 2FA token when needed. The admin interface is accessible at `http://localhost:7985` by default.
+
+### No Valid Tokens
+
+When starting without valid tokens, the bridge will:
+
+1. Start the admin interface on port 7985
+2. Wait for you to login via the web UI
+3. Dynamically start the WebDAV server after successful login
+
+The WebDAV server is dynamically managed without requiring container restarts:
+
+- When you login, the WebDAV server starts automatically
+- If tokens expire, the WebDAV server stops until new credentials are provided
+- When you logout, the WebDAV server stops until you login again
+
+This ensures the service is always available even without initial credentials and provides a smooth experience without container restarts.
+
+### Security Note
+
+The admin interface contains sensitive login functionality. If you're exposing the container outside your local network, consider:
+
+1. Using a reverse proxy with HTTPS
+2. Adding HTTP basic authentication
+3. Only exposing the WebDAV port (7984) and keeping the admin interface (7985) on localhost or behind a firewall
 
 ## Building the image locally
 

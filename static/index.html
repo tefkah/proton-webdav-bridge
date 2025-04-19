@@ -1,0 +1,226 @@
+<!DOCTYPE html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+		<title>Proton WebDAV Bridge Admin</title>
+		<style>
+			body {
+				font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+				max-width: 600px;
+				margin: 0 auto;
+				padding: 20px;
+				line-height: 1.5;
+			}
+			.card {
+				border: 1px solid #ddd;
+				border-radius: 5px;
+				padding: 20px;
+				margin-bottom: 20px;
+				box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+			}
+			.status {
+				display: flex;
+				align-items: center;
+				margin-bottom: 10px;
+			}
+			.status-dot {
+				width: 12px;
+				height: 12px;
+				border-radius: 50%;
+				margin-right: 10px;
+			}
+			.status-dot.connected {
+				background-color: #4caf50;
+			}
+			.status-dot.disconnected {
+				background-color: #f44336;
+			}
+			form {
+				display: none;
+			}
+			input,
+			button {
+				display: block;
+				width: 100%;
+				padding: 8px;
+				margin-bottom: 10px;
+				border: 1px solid #ddd;
+				border-radius: 4px;
+				box-sizing: border-box;
+			}
+			button {
+				background-color: #6200ee;
+				color: white;
+				cursor: pointer;
+				border: none;
+			}
+			button:hover {
+				background-color: #5000ca;
+			}
+			.error {
+				color: #f44336;
+				margin-top: 10px;
+			}
+			.success {
+				color: #4caf50;
+				margin-top: 10px;
+			}
+			#logout {
+				background-color: #f44336;
+			}
+			#logout:hover {
+				background-color: #d32f2f;
+			}
+		</style>
+	</head>
+	<body>
+		<h1>Proton WebDAV Bridge Admin</h1>
+
+		<div class="card">
+			<div class="status">
+				<div id="status-dot" class="status-dot disconnected"></div>
+				<div id="status-text">Checking status...</div>
+			</div>
+			<div id="last-login"></div>
+			<div id="error-message" class="error"></div>
+		</div>
+
+		<div id="login-card" class="card">
+			<h2>Login</h2>
+			<form id="login-form">
+				<input type="text" id="username" name="username" placeholder="Username / Email" required />
+				<input type="password" id="password" name="password" placeholder="Password" required />
+				<input
+					type="password"
+					id="mailbox-password"
+					name="mailbox_password"
+					placeholder="Mailbox Password (optional)"
+				/>
+				<input type="text" id="twofa" name="twofa" placeholder="2FA Token (if enabled)" />
+				<button type="submit">Login</button>
+				<div id="login-error" class="error"></div>
+				<div id="login-success" class="success"></div>
+			</form>
+			<button id="logout" style="display: none">Logout</button>
+		</div>
+
+		<script>
+			// Elements
+			const statusDot = document.getElementById("status-dot");
+			const statusText = document.getElementById("status-text");
+			const lastLogin = document.getElementById("last-login");
+			const errorMessage = document.getElementById("error-message");
+			const loginForm = document.getElementById("login-form");
+			const loginError = document.getElementById("login-error");
+			const loginSuccess = document.getElementById("login-success");
+			const logoutButton = document.getElementById("logout");
+
+			// Check status periodically
+			function checkStatus() {
+				fetch("/api/status")
+					.then((response) => response.json())
+					.then((data) => {
+						if (data.logged_in) {
+							statusDot.className = "status-dot connected";
+							statusText.textContent = "Connected to Proton Drive";
+							loginForm.style.display = "none";
+							logoutButton.style.display = "block";
+
+							if (data.last_login) {
+								const loginTime = new Date(data.last_login);
+								lastLogin.textContent = `Last login: ${loginTime.toLocaleString()}`;
+							}
+						} else {
+							statusDot.className = "status-dot disconnected";
+							statusText.textContent = "Not connected to Proton Drive";
+							loginForm.style.display = "block";
+							logoutButton.style.display = "none";
+
+							if (data.error) {
+								errorMessage.textContent = `Error: ${data.error}`;
+							} else if (data.needs_login) {
+								errorMessage.textContent = "Login required";
+							}
+						}
+					})
+					.catch((error) => {
+						console.error("Error fetching status:", error);
+						statusText.textContent = "Error checking status";
+						errorMessage.textContent = error.message;
+					});
+			}
+
+			// Initial check and set interval
+			checkStatus();
+			setInterval(checkStatus, 10000); // Check every 10 seconds
+
+			// Handle login form submission
+			loginForm.addEventListener("submit", function (e) {
+				e.preventDefault();
+
+				loginError.textContent = "";
+				loginSuccess.textContent = "";
+
+				const formData = {
+					username: document.getElementById("username").value,
+					password: document.getElementById("password").value,
+					mailbox_password: document.getElementById("mailbox-password").value,
+					twofa: document.getElementById("twofa").value,
+				};
+
+				// Show loading state
+				const submitButton = loginForm.querySelector('button[type="submit"]');
+				const originalText = submitButton.textContent;
+				submitButton.textContent = "Logging in...";
+				submitButton.disabled = true;
+
+				fetch("/api/login", {
+					method: "POST",
+					headers: {
+						"Content-Type": "application/json",
+					},
+					body: JSON.stringify(formData),
+				})
+					.then((response) => {
+						if (!response.ok) {
+							return response.text().then((text) => {
+								throw new Error(text);
+							});
+						}
+						return response.json();
+					})
+					.then((data) => {
+						loginSuccess.textContent = "Login successful. Restarting service...";
+						setTimeout(function () {
+							window.location.reload();
+						}, 2000);
+					})
+					.catch((error) => {
+						loginError.textContent = `Login failed: ${error.message}`;
+						submitButton.textContent = originalText;
+						submitButton.disabled = false;
+					});
+			});
+
+			// Handle logout button
+			logoutButton.addEventListener("click", function () {
+				fetch("/api/logout", {
+					method: "POST",
+				})
+					.then((response) => response.json())
+					.then(() => {
+						statusDot.className = "status-dot disconnected";
+						statusText.textContent = "Logged out successfully";
+						loginForm.style.display = "block";
+						logoutButton.style.display = "none";
+						lastLogin.textContent = "";
+						setTimeout(checkStatus, 1000);
+					})
+					.catch((error) => {
+						errorMessage.textContent = `Logout failed: ${error.message}`;
+					});
+			});
+		</script>
+	</body>
+</html>
