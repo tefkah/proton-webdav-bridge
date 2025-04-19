@@ -33,7 +33,7 @@ directory. I recommend using `$HOME/.local/bin` because it is fairly standard an
 variable in your shell. If you use a different target, you must make sure it is part of PATH.
 
 ```bash
-$ git clone https://github.com/StollD/proton-webdav-bridge
+$ git clone https://github.com/tefkah/proton-webdav-bridge
 $ cd proton-webdav-bridge
 $ env GOBIN="$HOME/.local/bin" go install .
 ```
@@ -104,5 +104,6 @@ For detailed instructions on using the Docker image, please see [DOCKER.md](DOCK
 
 ## Thanks
 
+- [StollD](https://github.com/StollD) for the initial implementation of the bridge
 - henrybear327 for publishing https://github.com/henrybear327/Proton-API-Bridge
 - Proton for publishing https://github.com/ProtonMail/go-proton-api

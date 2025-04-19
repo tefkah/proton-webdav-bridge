@@ -30,7 +30,7 @@ docker run -d \
   -p 7984:7984 \
   -p 7985:7985 \
   -v proton-webdav-data:/root/.local/share \
-  ghcr.io/stolld/proton-webdav-bridge:latest
+  ghcr.io/tefkah/proton-webdav-bridge:latest
 ```
 
 Then open `http://localhost:7985` in your browser to access the admin interface. You'll be prompted to log in with your Proton credentials. After successful login, the WebDAV server will start automatically.
@@ -48,7 +48,7 @@ To login to your Proton account interactively, run:
 ```bash
 docker run -it --rm \
   -v proton-webdav-data:/root/.local/share \
-  ghcr.io/stolld/proton-webdav-bridge:latest --login
+  ghcr.io/tefkah/proton-webdav-bridge:latest --login
 ```
 
 This will prompt you for your credentials and store the authentication tokens in the mounted volume.
@@ -67,7 +67,7 @@ docker run -d \
   -e PROTON_PASSWORD=your-password \
   -e PROTON_MAILBOX_PASSWORD=your-mailbox-password \
   -e PROTON_2FA=your-2fa-token \
-  ghcr.io/stolld/proton-webdav-bridge:latest
+  ghcr.io/tefkah/proton-webdav-bridge:latest
 ```
 
 Required environment variables:
@@ -99,7 +99,7 @@ docker run -d \
   -p 7984:7984 \
   -p 7985:7985 \
   -v proton-webdav-data:/root/.local/share \
-  ghcr.io/stolld/proton-webdav-bridge:latest
+  ghcr.io/tefkah/proton-webdav-bridge:latest
 ```
 
 This will:
@@ -122,7 +122,7 @@ version: "3"
 
 services:
   proton-webdav:
-    image: ghcr.io/stolld/proton-webdav-bridge:latest
+    image: ghcr.io/tefkah/proton-webdav-bridge:latest
     container_name: proton-webdav
     restart: unless-stopped
     ports:
@@ -181,7 +181,7 @@ version: "3"
 
 services:
   proton-webdav:
-    image: ghcr.io/stolld/proton-webdav-bridge:latest
+    image: ghcr.io/tefkah/proton-webdav-bridge:latest
     container_name: proton-webdav
     restart: unless-stopped
     volumes:
@@ -340,9 +340,9 @@ The admin interface contains sensitive login functionality. If you're exposing t
 If you want to build the image yourself:
 
 ```bash
-git clone https://github.com/StollD/proton-webdav-bridge.git
+git clone https://github.com/tefkah/proton-webdav-bridge.git
 cd proton-webdav-bridge
 docker build -t proton-webdav-bridge .
 ```
 
-Then run it using the same commands as above, replacing `ghcr.io/stolld/proton-webdav-bridge:latest` with `proton-webdav-bridge`.
+Then run it using the same commands as above, replacing `ghcr.io/tefkah/proton-webdav-bridge:latest` with `proton-webdav-bridge`.
