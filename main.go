@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 
 	drive "github.com/StollD/proton-drive"
 	"github.com/StollD/webdav"
@@ -25,55 +26,61 @@ var (
 	OptListen = "127.0.0.1:7984"
 )
 
-func doLogin() error {
+// get credential from environment or prompt user
+func getCredential(envVar, prompt, hint string, masked bool) (string, error) {
+	// try to get from environment first
+	if value := os.Getenv(envVar); value != "" {
+		// special case: "false" for optional credentials means skip/empty
+		if value == "false" && (envVar == "PROTON_MAILBOX_PASSWORD" || envVar == "PROTON_2FA") {
+			return "", nil
+		}
+		return value, nil
+	}
+
+	// if not in environment, prompt user
 	reader := bufio.NewReader(os.Stdin)
-
-	fmt.Println("Enter the username of your Proton Drive account.")
+	fmt.Println(prompt)
+	if hint != "" {
+		fmt.Println(hint)
+	}
 	fmt.Print("> ")
 
-	user, err := reader.ReadString('\n')
-	fmt.Println()
+	if masked {
+		pass, err := go_asterisks.GetUsersPassword("", true, os.Stdin, os.Stdout)
+		fmt.Println()
+		return string(pass), err
+	}
 
+	value, err := reader.ReadString('\n')
+	fmt.Println()
+	return strings.TrimSpace(value), err
+}
+
+func doLogin() error {
+	user, err := getCredential("PROTON_USERNAME", "Enter the username of your Proton Drive account.", "", false)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("Enter the password of your Proton Drive account.")
-	fmt.Print("> ")
-
-	pass, err := go_asterisks.GetUsersPassword("", true, os.Stdin, os.Stdout)
-	fmt.Println()
-
+	pass, err := getCredential("PROTON_PASSWORD", "Enter the password of your Proton Drive account.", "", true)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("Enter the mailbox password of your Proton Drive account.")
-	fmt.Println("If you don't have a mailbox password, press enter.")
-	fmt.Print("> ")
-
-	mailbox, err := go_asterisks.GetUsersPassword("", true, os.Stdin, os.Stdout)
-	fmt.Println()
-
+	mailbox, err := getCredential("PROTON_MAILBOX_PASSWORD", "Enter the mailbox password of your Proton Drive account.", "If you don't have a mailbox password, press enter.", true)
 	if err != nil {
 		return err
 	}
 
-	fmt.Println("Enter a valid 2FA token for your Proton Drive account.")
-	fmt.Println("If you don't have 2FA setup, press enter.")
-	fmt.Print("> ")
-
-	twoFA, err := reader.ReadString('\n')
-	fmt.Println()
-
+	twoFA, err := getCredential("PROTON_2FA", "Enter a valid 2FA token for your Proton Drive account.", "If you don't have 2FA setup, press enter.", false)
 	if err != nil {
 		return err
 	}
 
 	credentials := drive.Credentials{
 		Username:        user,
-		Password:        string(pass),
-		MailboxPassword: string(mailbox),
+		Password:        pass,
+		MailboxPassword: mailbox,
 		TwoFA:           twoFA,
 	}
 
@@ -95,14 +102,34 @@ func doLogin() error {
 	return nil
 }
 
+func canAutoLogin() bool {
+	return os.Getenv("PROTON_USERNAME") != "" && 
+	       os.Getenv("PROTON_PASSWORD") != "" 
+}
+
 func doListen() error {
 	tokens, err := loadTokens()
+	autoLoginAvailable := canAutoLogin()
+	
 	if err != nil {
-		fmt.Println("Failed to load tokens!")
-		fmt.Println("Run with --login to fix this!")
-		fmt.Println()
-
-		return err
+		if !autoLoginAvailable {
+			fmt.Println("Failed to load tokens!")
+			fmt.Println("Run with --login to fix this or set environment variables.")
+			fmt.Println()
+			return err
+		}
+		
+		// Auto-login using environment variables
+		fmt.Println("No tokens found, attempting automatic login...")
+		if err := doLogin(); err != nil {
+			return err
+		}
+		
+		// Reload tokens after login
+		tokens, err = loadTokens()
+		if err != nil {
+			return err
+		}
 	}
 
 	fmt.Println("Waiting for network ...")
@@ -126,11 +153,24 @@ func doListen() error {
 	})
 
 	app.OnTokensExpired(func() {
-		fmt.Println("The stored tokens are no longer valid!")
-		fmt.Println("Run with --login to fix this!")
-		fmt.Println()
-
-		os.Exit(1)
+		fmt.Println("Tokens expired, attempting to renew...")
+		
+		if !autoLoginAvailable {
+			fmt.Println("Unable to automatically renew tokens!")
+			fmt.Println("Run with --login to fix this or set environment variables.")
+			fmt.Println()
+			os.Exit(1)
+		}
+		
+		// Auto re-login
+		if err := doLogin(); err != nil {
+			fmt.Println("Error renewing tokens:", err)
+			os.Exit(1)
+		}
+		
+		fmt.Println("Tokens renewed, restarting connection...")
+		// We exit and let the process manager restart us
+		os.Exit(0)
 	})
 
 	session := drive.NewSession(app)

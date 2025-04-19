@@ -16,7 +16,10 @@ gen
 
 !README.md
 !LICENSE
+!Dockerfile
+!DOCKER.md
 
+!.github/**
 # !Makefile
 
 # ...even if they are in subdirectories

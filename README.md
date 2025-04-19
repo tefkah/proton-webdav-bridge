@@ -5,9 +5,9 @@ An alternative approach to interacting with Proton Drive on Linux.
 Instead of integrating the Proton Drive API into a tool like rclone, this program will expose a local interface to it
 using the WebDAV protocol. This approach has two benefits over the existing backend in rclone:
 
-* You can use any client that supports WebDAV (even though rclone is still the recommended one, for reasons explained
+- You can use any client that supports WebDAV (even though rclone is still the recommended one, for reasons explained
   below)
-* Because the bridge runs as a daemon, it can cache the entire directory tree and only update it when required, through
+- Because the bridge runs as a daemon, it can cache the entire directory tree and only update it when required, through
   the event system of Proton Drive. This enables near instant directory listings through WebDAV.
 
 ## Disclaimer
@@ -84,9 +84,10 @@ There is also no standard way for the client to set the modification time, which
 resets their modification time.
 
 To bridge this gap, the bridge implements a few extensions:
-* Modification time can be set through a `X-OC-Mtime` header (OwnCloud extension)
-* The SHA1 of a file can be read through the `checksums` property (OwnCloud extension)
-* The SHA1 of a file can be read through the `sha1hex` property (FastMail extension)
+
+- Modification time can be set through a `X-OC-Mtime` header (OwnCloud extension)
+- The SHA1 of a file can be read through the `checksums` property (OwnCloud extension)
+- The SHA1 of a file can be read through the `sha1hex` property (FastMail extension)
 
 To make full use of these extensions, you should use the rclone WebDAV backend and configure its vendor type to
 `fastmail`. This maps pretty much 1:1 to what Proton Drive and this bridge support and will provide the best
@@ -95,7 +96,13 @@ experience.
 If there are any other clients that support these extensions, or if there are useful extensions I missed, please open
 an issue or send a pull request!
 
+## Docker
+
+This project can also be run as a Docker container. This is useful if you don't want to install Go or build the project manually.
+
+For detailed instructions on using the Docker image, please see [DOCKER.md](DOCKER.md).
+
 ## Thanks
 
-* henrybear327 for publishing https://github.com/henrybear327/Proton-API-Bridge
-* Proton for publishing https://github.com/ProtonMail/go-proton-api
+- henrybear327 for publishing https://github.com/henrybear327/Proton-API-Bridge
+- Proton for publishing https://github.com/ProtonMail/go-proton-api
