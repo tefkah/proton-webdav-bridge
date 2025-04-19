@@ -115,7 +115,7 @@ The admin interface will be accessible at `http://localhost:7985`.
 
 ### Using with docker-compose
 
-For more permanent setups, you can use docker-compose:
+For a production setup, here's a recommended configuration using Caddy as a reverse proxy with automatic HTTPS:
 
 ```yaml
 version: "3"
@@ -125,95 +125,26 @@ services:
     image: ghcr.io/tefkah/proton-webdav-bridge:latest
     container_name: proton-webdav
     restart: unless-stopped
-    ports:
-      - "7984:7984"
-      - "7985:7985"
+    # Only expose ports to internal network, not to host
+    expose:
+      - "7984"
+      - "7985"
     volumes:
       - proton-webdav-data:/root/.local/share
-    environment:
-      - PROTON_USERNAME=your-username
-      - PROTON_PASSWORD=your-password
-      # Optional variables
-      - PROTON_MAILBOX_PASSWORD=false # Skip mailbox password
-      - PROTON_2FA=false # Skip 2FA token
-
-volumes:
-  proton-webdav-data:
-```
-
-### Advanced Docker Compose Tips
-
-#### Health Checks
-
-Add health checks to ensure your container is properly running:
-
-```yaml
-services:
-  proton-webdav:
-    # ... other config ...
-    healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://localhost:7985/"]
-      interval: 1m
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-```
-
-#### Securing Admin Interface
-
-For better security, don't expose the admin interface to the public, instead use a reverse proxy or keep it internal:
-
-```yaml
-services:
-  proton-webdav:
-    # ... other config ...
-    ports:
-      - "7984:7984" # WebDAV - public
-      - "127.0.0.1:7985:7985" # Admin - localhost only
-```
-
-#### Integrating with Other Services
-
-Example with a reverse proxy (Traefik) for HTTPS:
-
-```yaml
-version: "3"
-
-services:
-  proton-webdav:
-    image: ghcr.io/tefkah/proton-webdav-bridge:latest
-    container_name: proton-webdav
-    restart: unless-stopped
-    volumes:
-      - proton-webdav-data:/root/.local/share
-    # Using internal networks instead of exposing ports
     networks:
       - internal
-    labels:
-      - "traefik.enable=true"
-      - "traefik.http.routers.webdav.rule=Host(`webdav.example.com`)"
-      - "traefik.http.routers.webdav.entrypoints=websecure"
-      - "traefik.http.routers.webdav.tls.certresolver=myresolver"
-      - "traefik.http.services.webdav.loadbalancer.server.port=7984"
-      # Admin interface with basic auth
-      - "traefik.http.routers.webdav-admin.rule=Host(`webdav-admin.example.com`)"
-      - "traefik.http.routers.webdav-admin.entrypoints=websecure"
-      - "traefik.http.routers.webdav-admin.tls.certresolver=myresolver"
-      - "traefik.http.routers.webdav-admin.middlewares=webdav-auth"
-      - "traefik.http.services.webdav-admin.loadbalancer.server.port=7985"
-      - "traefik.http.middlewares.webdav-auth.basicauth.users=admin:$$apr1$$xxxxxxxx" # Generate with htpasswd
 
-  traefik:
-    image: traefik:v2.9
-    container_name: traefik
+  caddy:
+    image: caddy:2
+    container_name: caddy
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/config:/etc/traefik
-      - ./traefik/certificates:/certificates
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
     networks:
       - internal
       - default
@@ -224,82 +155,56 @@ networks:
 
 volumes:
   proton-webdav-data:
+  caddy_data:
+  caddy_config:
 ```
 
-#### Using Docker Secrets
+Create a `Caddyfile` in the same directory with the following content:
 
-For production environments, use Docker secrets instead of environment variables:
+```
+webdav.example.com {
+    # Main WebDAV endpoint
+    handle / {
+        reverse_proxy proton-webdav:7984
+    }
 
-```yaml
-version: "3.8"
+    # Admin interface under /admin
+    handle /admin/* {
+        uri strip_prefix /admin
+        reverse_proxy proton-webdav:7985
+    }
 
-services:
-  proton-webdav:
-    image: ghcr.io/stolld/proton-webdav-bridge:latest
-    container_name: proton-webdav
-    restart: unless-stopped
-    ports:
-      - "7984:7984"
-      - "7985:7985"
-    volumes:
-      - proton-webdav-data:/root/.local/share
-    environment:
-      - PROTON_USERNAME_FILE=/run/secrets/proton_username
-      - PROTON_PASSWORD_FILE=/run/secrets/proton_password
-    secrets:
-      - proton_username
-      - proton_password
-
-secrets:
-  proton_username:
-    file: ./secrets/username.txt
-  proton_password:
-    file: ./secrets/password.txt
-
-volumes:
-  proton-webdav-data:
+    # Optional basic auth for admin interface
+    @admin {
+        path /admin/*
+    }
+    basicauth @admin {
+        admin $2a$14$YOUR_HASHED_PASSWORD_HERE
+        # Generate with: caddy hash-password
+    }
+}
 ```
 
-**Note:** The current version of the bridge doesn't support Docker secrets directly. You would need to modify the code to read secrets from files if you want to use this approach.
+This setup:
 
-#### Resource Limits
+- Automatically obtains and renews HTTPS certificates
+- Places the WebDAV interface at the root path (`/`)
+- Places the admin interface under `/admin`
+- Adds optional basic authentication to the admin interface
+- Keeps your credentials secure in Docker volumes
 
-Set resource limits to ensure the container doesn't consume too much memory:
+To use it:
 
-```yaml
-services:
-  proton-webdav:
-    # ... other config ...
-    deploy:
-      resources:
-        limits:
-          cpus: "0.50"
-          memory: 256M
-        reservations:
-          cpus: "0.25"
-          memory: 128M
-```
+1. Replace `webdav.example.com` with your actual domain
+2. Run `caddy hash-password` to generate a secure password hash
+3. Update the Caddyfile with your generated hash
+4. Ensure your domain points to your server's IP address
+5. Run with `docker-compose up -d`
 
-#### Auto-Restarting
+You can now access:
 
-For improved reliability, use the `autoheal` container to automatically restart unhealthy containers:
-
-```yaml
-services:
-  proton-webdav:
-    # ... include healthcheck config ...
-    labels:
-      - "autoheal=true"
-
-  autoheal:
-    image: willfarrell/autoheal
-    container_name: autoheal
-    restart: always
-    environment:
-      - AUTOHEAL_CONTAINER_LABEL=autoheal
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-```
+- WebDAV at `https://webdav.example.com/`
+- Admin interface at `https://webdav.example.com/admin/`
 
 ## Admin Interface
 
